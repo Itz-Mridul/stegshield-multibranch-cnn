@@ -13,17 +13,34 @@ WHAT THIS DOES:
 
 FEATURES EXTRACTED:
   1. Pixel histogram: How are pixel values distributed? (256 bins)
-  2. Chi-square statistic: Are pairs of adjacent histogram bins balanced?
-     (LSB embedding makes odd bins slightly heavier — chi-square detects this)
+  2. Chi-square statistic: Are pairs of adjacent histogram bins unusually equal?
+     In a natural image, adjacent even/odd histogram bins are NOT equally populated
+     — they follow the natural image distribution.
+     After LSB embedding with random data, each pixel's LSB is overwritten with a
+     random bit, which tends to EQUALISE adjacent even/odd bin pairs:
+       e.g. bin[200] and bin[201] become nearly equal after embedding.
+     The RS chi-square statistic measures this equalization:
+       - For natural images: chi-square is HIGHER (bins are unequal)
+       - For stego images:   chi-square is LOWER  (bins are equalized)
+     The model learns this pattern either way; we must report the direction correctly.
   3. Entropy: How random is the pixel distribution?
   4. Mean, standard deviation, skewness, kurtosis: Basic statistics
   5. Local variance: How does pixel variance vary across the image?
 
 WHY THIS CATCHES STEGANOGRAPHY:
-  When you embed data via LSB, you change pixel values by ±1.
-  This makes histogram bins at even numbers VERY slightly different
-  from bins at odd numbers.  The chi-square test is specifically designed
-  to catch this pair-of-bins imbalance.
+  When you embed data via LSB with a random payload, each pixel's last bit
+  is set to a random 0 or 1.  This forces each pair of adjacent histogram
+  bins (e.g. bins for value 200 and 201) towards equal counts.
+  Natural images do NOT have equal adjacent bins — the distribution is smooth
+  but not symmetric at the 1-bit level.
+
+  The chi-square test quantifies how close each pair is to equal counts.
+  LOWER chi-square → more equalized → more suspicious of LSB embedding.
+  HIGHER chi-square → more unequal → more natural (likely clean).
+
+  The CNN learns this relationship automatically from data; the feature
+  value itself (whether low or high chi-sq = stego) is empirically determined
+  during training. What matters is that the feature changes measurably.
 
 NOTE ON HONESTY (from project docs):
   Branch C works well against classical/older steganography.
@@ -70,40 +87,51 @@ def extract_histogram(img: np.ndarray, bins: int = 256) -> np.ndarray:
 
 def compute_chi_square_statistic(img: np.ndarray) -> float:
     """
-    Chi-square test for detecting LSB steganography.
+    RS Chi-square test for detecting LSB steganography.
 
-    THE THEORY (simple version):
-      In a natural image, pixel values are smoothly distributed.
-      After LSB embedding, values at (0,1), (2,3), (4,5), ... become similar.
-      This happens because when you embed a random bit, a pixel that was 200
-      gets changed to 201 (or stays 200), and a pixel that was 201 might stay
-      201 (or get changed to 200). So adjacent even-odd pairs "merge."
+    THE CORRECT THEORY:
+      In a natural image, adjacent histogram bins (e.g. 200 and 201) have
+      counts that follow the underlying image distribution — they are
+      generally NOT equal to each other.
 
-      The chi-square statistic measures how much this pairing deviates from
-      the expected distribution. Higher chi-square = more likely stego.
+      After LSB embedding with a RANDOM payload, each pixel's LSB is
+      overwritten with a random bit (0 or 1 with equal probability 0.5).
+      This tends to EQUALISE adjacent even/odd bin pairs:
+        pixels with value 200 → some become 201, pixels with value 201 →
+        some become 200, until both bins tend toward (count_200 + count_201) / 2.
+
+      The chi-square statistic measures the DEVIATION from equal bin pairs:
+        chi_sq = sum( (observed - expected)^2 / expected )
+        where expected = (bin[2k] + bin[2k+1]) / 2  for k = 0..127
+
+      DIRECTION (important for correct theory):
+        - Natural (clean) image:  chi_sq is HIGH   (bins are unequal, natural)
+        - After LSB embedding:    chi_sq is LOW     (bins are equalized)
+
+      A LOWER chi-square therefore indicates HIGHER suspicion of stego.
+      The model learns this from data; the feature sign just must be consistent.
 
     Returns:
-        Chi-square statistic (float). Higher = more suspicious.
+        Chi-square statistic (float). LOWER = more suspicious for LSB stego.
     """
     hist, _ = np.histogram(img.flatten(), bins=256, range=(0, 255))
 
-    # Pair up adjacent bins: (0,1), (2,3), (4,5), ...
-    # These pairs should have similar counts in a stego image
+    # Pair adjacent even/odd bins: (0,1), (2,3), (4,5), ...
     pairs_expected = []
     pairs_observed_0 = []
-    pairs_observed_1 = []
 
     for i in range(0, 256 - 1, 2):
         pair_sum = hist[i] + hist[i + 1]
-        expected = pair_sum / 2.0         # if stego: both should be equal
+        expected = pair_sum / 2.0         # equal split = post-embedding expectation
         pairs_expected.append(expected)
         pairs_observed_0.append(hist[i])
-        pairs_observed_1.append(hist[i + 1])
 
     pairs_expected = np.array(pairs_expected, dtype=np.float64)
     pairs_observed_0 = np.array(pairs_observed_0, dtype=np.float64)
 
-    # Chi-square = sum( (observed - expected)^2 / expected )
+    # chi-square = sum( (observed - expected)^2 / expected )
+    # HIGH value → bins are unequal → likely clean
+    # LOW value  → bins are equalized → suspicious of LSB embedding
     mask = pairs_expected > 0
     chi_sq = np.sum(
         (pairs_observed_0[mask] - pairs_expected[mask]) ** 2 / pairs_expected[mask]

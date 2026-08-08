@@ -8,11 +8,19 @@ WHAT THIS DOES:
            of each pixel value by 0 or 1. Human eye cannot see the difference.
   - EXTRACT: Reads back the hidden data from a stego image.
   - CREATE DATASET: Batch-embeds random data into a folder of clean images.
+  - JPEG-STEGO: Placeholder for frequency-domain JPEG steganography.
 
 HOW LSB WORKS:
   Normal pixel: 200 = 11001000 in binary
   Attacker hides bit '1': changes to 201 = 11001001
   Human eye sees ZERO difference. But you can hide megabytes this way.
+
+IMPORTANT — OUTPUT FORMAT:
+  LSB steganography MUST be saved as lossless PNG or PGM.
+  NEVER save as JPEG — JPEG re-compression is lossy and will corrupt
+  the embedded bits (even 1 bit changed by quantisation = wrong label).
+  This tool enforces this: if output_path ends in .jpg/.jpeg the file
+  is saved as .png with a corrected filename and a warning is printed.
 
 STUDENT A TASK: Run this to create your stego dataset (Week 2-3).
 """
@@ -102,52 +110,86 @@ def extract_lsb(image: np.ndarray, payload_length_bytes: int) -> bytes:
 
 # ─── Dataset Creation ─────────────────────────────────────────────────────────
 
+# Lossless formats safe for LSB output
+_LOSSLESS_EXTENSIONS = {".png", ".pgm", ".bmp"}
+_LOSSY_EXTENSIONS    = {".jpg", ".jpeg"}
+
+
+def _enforce_lossless_output(output_path: str) -> str:
+    """
+    JPEG output would destroy the embedded bits via lossy compression.
+    If output_path ends in .jpg/.jpeg, redirect to a .png filename and warn.
+    Returns the (possibly corrected) output path.
+    """
+    p = Path(output_path)
+    if p.suffix.lower() in _LOSSY_EXTENSIONS:
+        corrected = str(p.with_suffix(".png"))
+        print(f"[WARNING] LSB output cannot be JPEG (lossy). "
+              f"Saving as PNG instead: {corrected}")
+        return corrected
+    return output_path
+
+
 def create_stego_image(
     input_path: str,
     output_path: str,
     payload_size_bytes: Optional[int] = None,
+    payload_fraction: float = 0.10,
     seed: Optional[int] = None
 ) -> int:
     """
-    Take a single clean image, embed random payload, save as stego image.
+    Take a single clean image, embed random payload, save as lossless stego image.
 
     Args:
-        input_path        : path to the clean image (.png / .jpg)
-        output_path       : where to save the stego image
-        payload_size_bytes: how many bytes to hide (default: 10% of capacity)
+        input_path        : path to the clean image (.png / .pgm / .jpg accepted)
+        output_path       : where to save the stego image.
+                            MUST be lossless (.png/.pgm/.bmp).
+                            If .jpg/.jpeg is passed, it is changed to .png + warning.
+        payload_size_bytes: exact bytes to embed. If None, uses payload_fraction.
+        payload_fraction  : fraction of total pixel capacity to fill (0.0 < f <= 1.0).
+                            Overridden by payload_size_bytes if that is set.
+                            Default 0.10 = embed in 10% of pixels.
         seed              : random seed for reproducibility
 
     Returns:
-        Number of bytes embedded.
+        Number of bytes actually embedded.
     """
+    if not (0.0 < payload_fraction <= 1.0):
+        raise ValueError(
+            f"payload_fraction must be in (0.0, 1.0], got {payload_fraction}"
+        )
+
+    # Enforce lossless output (fix .jpg → .png automatically)
+    output_path = _enforce_lossless_output(output_path)
+
     if seed is not None:
         random.seed(seed)
         np.random.seed(seed)
 
-    # Load image as numpy array
-    img = Image.open(input_path).convert("L")  # convert to grayscale (L mode)
+    # Load clean image as grayscale numpy array
+    img = Image.open(input_path).convert("L")
     img_array = np.array(img, dtype=np.uint8)
 
     total_pixels = img_array.size
+    max_bytes = total_pixels // 8
 
-    # Default: hide data using 10% of pixel capacity
+    # Determine payload size
     if payload_size_bytes is None:
-        payload_size_bytes = total_pixels // (8 * 10)   # 10% capacity
+        payload_size_bytes = max(1, int(max_bytes * payload_fraction))
 
     # Clamp to max capacity
-    max_bytes = total_pixels // 8
     payload_size_bytes = min(payload_size_bytes, max_bytes)
 
-    # Generate random payload (simulates a hidden document)
+    # Generate random payload (simulates hidden document)
     payload = bytes([random.randint(0, 255) for _ in range(payload_size_bytes)])
 
-    # Embed the payload
+    # Embed via LSB
     stego_array = embed_lsb(img_array, payload)
 
-    # Save stego image
+    # Save as lossless PNG
     stego_img = Image.fromarray(stego_array.astype(np.uint8))
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    stego_img.save(output_path)
+    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+    stego_img.save(output_path)   # PIL infers PNG from .png extension
 
     return payload_size_bytes
 
@@ -156,27 +198,33 @@ def create_stego_dataset(
     clean_dir: str,
     output_dir: str,
     max_images: Optional[int] = None,
-    payload_fraction: float = 0.1,
+    payload_fraction: float = 0.10,
     verbose: bool = True
 ) -> dict:
     """
-    Batch create stego images from a directory of clean images.
+    Batch create LSB-stego images from a directory of clean images.
+
+    OUTPUT FILES ARE ALWAYS PNG — regardless of input format.
+    JPEG inputs are accepted (clean source), but stego outputs are lossless PNG.
 
     Args:
-        clean_dir       : folder with clean PNG/JPG images
-        output_dir      : folder to save stego images
-        max_images      : limit how many images to process (None = all)
-        payload_fraction: fraction of pixel capacity to fill (0.1 = 10%)
+        clean_dir       : folder with clean images (any format)
+        output_dir      : folder to save stego PNG images
+        max_images      : limit images processed (None = all)
+        payload_fraction: fraction of pixel capacity to fill (0.0 < f <= 1.0)
         verbose         : print progress
 
     Returns:
-        dict with statistics (num_processed, num_failed, etc.)
+        dict with statistics (num_processed, num_failed, total, skipped_jpeg_out)
     """
+    if not (0.0 < payload_fraction <= 1.0):
+        raise ValueError(f"payload_fraction must be in (0, 1], got {payload_fraction}")
+
     clean_path = Path(clean_dir)
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
-    # Collect all image files
+    # Accept any common image format as clean input
     extensions = {".png", ".jpg", ".jpeg", ".bmp", ".pgm"}
     image_files = [
         f for f in sorted(clean_path.iterdir())
@@ -189,18 +237,20 @@ def create_stego_dataset(
     stats = {"processed": 0, "failed": 0, "total": len(image_files)}
 
     for idx, img_file in enumerate(image_files):
-        out_file = output_path / img_file.name
+        # Always output as PNG to preserve LSB bits
+        out_file = output_path / (img_file.stem + ".png")
         try:
             bytes_embedded = create_stego_image(
                 input_path=str(img_file),
                 output_path=str(out_file),
-                seed=idx  # deterministic per image
+                payload_fraction=payload_fraction,   # ← now correctly passed through
+                seed=idx
             )
             stats["processed"] += 1
 
             if verbose and (idx + 1) % 100 == 0:
-                print(f"[{idx + 1}/{len(image_files)}] Done: {img_file.name} "
-                      f"({bytes_embedded} bytes hidden)")
+                print(f"[{idx + 1}/{len(image_files)}] {img_file.name} → "
+                      f"{out_file.name} ({bytes_embedded} bytes hidden)")
 
         except Exception as e:
             stats["failed"] += 1
@@ -210,6 +260,88 @@ def create_stego_dataset(
     if verbose:
         print(f"\n✅ Done! Processed: {stats['processed']}, "
               f"Failed: {stats['failed']}, Total: {stats['total']}")
+
+    return stats
+
+
+def create_jpeg_stego_dataset(
+    clean_jpeg_dir: str,
+    output_dir: str,
+    max_images: Optional[int] = None,
+    quality: int = 75,
+    verbose: bool = True
+) -> dict:
+    """
+    Placeholder for JPEG-domain steganography dataset generation.
+
+    WHY THIS EXISTS (Issue #3 fix):
+      Branch B is designed to detect frequency-domain (JPEG-domain) stego.
+      But the original dataset only contained spatial LSB stego images.
+      That means Branch B was trained and evaluated on the WRONG domain —
+      the claim "detects JPEG-domain stego" was unsubstantiated.
+
+    WHAT SHOULD GO HERE:
+      Replace this stub with a real JPEG-domain embedding method.
+      Recommended options (in order of quality):
+
+      Option A — J-UNIWARD (best, but complex):
+        J-UNIWARD embeds data by minimising cost in the wavelet domain.
+        Reference implementation: https://github.com/daniellerch/stegolab
+        pip install stegolab
+        from stegolab.stego import jUniwRd
+        jUniwRd.embed(cover_path, stego_path, payload=0.4)
+
+      Option B — F5 Algorithm (simpler):
+        F5 hides data in JPEG DCT coefficients directly.
+        Reference: https://github.com/davidlaewen/f5-steganography
+
+      Option C — Outguess (publicly available tool):
+        brew install outguess
+        outguess -d payload.txt cover.jpg stego.jpg
+
+    CURRENT STATUS:
+      This is a STUB — it just creates a copy of the clean images
+      re-saved at reduced JPEG quality (simulating JPEG processing, NOT stego).
+      Do NOT use stub output for Branch B evaluation claims.
+      Replace with a real stego method before writing the paper.
+
+    Args:
+        clean_jpeg_dir: folder with clean JPEG images
+        output_dir    : folder to save JPEG stego images
+        max_images    : limit images processed
+        quality       : JPEG quality level for re-save (placeholder only)
+        verbose       : print progress
+    """
+    if verbose:
+        print("[WARNING] create_jpeg_stego_dataset is a STUB.")
+        print("  Replace with J-UNIWARD or F5 before making Branch B claims.")
+        print("  See function docstring for options.")
+
+    clean_path = Path(clean_jpeg_dir)
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    extensions = {".jpg", ".jpeg"}
+    image_files = [
+        f for f in sorted(clean_path.iterdir())
+        if f.suffix.lower() in extensions
+    ]
+    if max_images:
+        image_files = image_files[:max_images]
+
+    stats = {"processed": 0, "failed": 0, "total": len(image_files)}
+
+    for img_file in image_files:
+        try:
+            img = Image.open(img_file).convert("L")
+            out_file = output_path / img_file.name
+            # STUB: re-save at lower quality — NOT real steganography
+            img.save(str(out_file), "JPEG", quality=quality)
+            stats["processed"] += 1
+        except Exception as e:
+            stats["failed"] += 1
+            if verbose:
+                print(f"[FAILED] {img_file.name}: {e}")
 
     return stats
 
@@ -257,6 +389,8 @@ def main():
     dataset_parser.add_argument("--input", required=True, help="Folder with clean images")
     dataset_parser.add_argument("--output", required=True, help="Folder to save stego images")
     dataset_parser.add_argument("--max", type=int, default=None, help="Max images to process")
+    dataset_parser.add_argument("--payload_fraction", type=float, default=0.10,
+                                help="Fraction of pixel capacity to embed (0.0 < f <= 1.0, default 0.10)")
 
     # ── verify ──
     verify_parser = subparsers.add_parser("verify", help="Verify a stego image")
@@ -274,7 +408,11 @@ def main():
         print(f"✅ Embedded {n} bytes into {args.output}")
 
     elif args.command == "dataset":
-        create_stego_dataset(args.input, args.output, max_images=args.max)
+        create_stego_dataset(
+            args.input, args.output,
+            max_images=args.max,
+            payload_fraction=args.payload_fraction
+        )
 
     elif args.command == "verify":
         ok = verify_embedding(args.clean, args.stego, args.bytes)

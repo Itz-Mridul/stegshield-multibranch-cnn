@@ -122,8 +122,19 @@ class SteganalysiPredictor:
         else:
             raise TypeError(f"Unsupported image type: {type(image)}")
 
-        img = img.resize((self.image_size, self.image_size), Image.BILINEAR)
-        arr = np.array(img, dtype=np.float32) / 255.0
+        # Use centre crop — NOT resize — to preserve exact LSB pixel values.
+        # Bilinear interpolation averages neighbours, which corrupts 1-bit LSB payloads.
+        W, H = img.size
+        if W < self.image_size or H < self.image_size:
+            raise ValueError(
+                f"Image {W}×{H} is smaller than crop_size={self.image_size}. "
+                "Either use a larger image or reduce crop_size in the Config."
+            )
+        # Centre crop
+        left = (W - self.image_size) // 2
+        top  = (H - self.image_size) // 2
+        img  = img.crop((left, top, left + self.image_size, top + self.image_size))
+        arr  = np.array(img, dtype=np.float32) / 255.0
         arr = (arr - 0.5) / 0.5                           # normalize to [-1, 1]
         tensor = torch.tensor(arr).unsqueeze(0).unsqueeze(0)  # (1, 1, H, W)
         return tensor

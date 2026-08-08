@@ -72,14 +72,18 @@ pip install -r requirements.txt
 # Download BOSS dataset (requires registration at agents.cz/boss)
 bash scripts/setup_boss_dataset.sh
 
-# Create stego images from clean ones
-python src/data_pipeline/lsb_embedder.py --input data/clean --output data/stego
+# Create stego PNG images from clean images
+# (the `dataset` subcommand is required; output is always saved as .png to preserve LSB bits)
+python src/data_pipeline/lsb_embedder.py dataset --input data/clean --output data/stego
 ```
 
 ### 3. Train the model
 ```bash
-# Train all branches + fusion (use Colab for GPU training)
-python src/training/train.py --config src/training/config.py
+# Train each branch first, then the fusion model
+python src/training/train.py --mode branch_a
+python src/training/train.py --mode branch_b
+python src/training/train.py --mode branch_c
+python src/training/train.py --mode fusion
 ```
 
 ### 4. Evaluate
