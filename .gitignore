@@ -1,0 +1,70 @@
+# ── Python ────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ── Virtual Environments ──────────────────────────────────────
+.env
+.venv
+env/
+venv/
+ENV/
+
+# ── Jupyter Notebooks ─────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# ── Model Weights (large binary files — use Git LFS if needed)─
+weights/*.pt
+weights/*.pth
+weights/*.onnx
+weights/*.bin
+# Keep the weights/ folder itself
+!weights/.gitkeep
+
+# ── Dataset (BOSS images are too large for GitHub) ────────────
+data/raw/
+data/clean/
+data/stego/
+# Keep folder structure
+!data/raw/.gitkeep
+!data/clean/.gitkeep
+!data/stego/.gitkeep
+
+# ── Results / Plots ───────────────────────────────────────────
+results/*.png
+results/*.jpg
+results/*.csv
+# Keep folder
+!results/.gitkeep
+
+# ── OS Files ──────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+desktop.ini
+
+# ── IDE / Editor ──────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── Logs ──────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── Misc ──────────────────────────────────────────────────────
+*.zip
+*.tar.gz
+.cache/
