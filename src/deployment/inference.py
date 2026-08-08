@@ -96,8 +96,15 @@ class SteganalysiPredictor:
             state = torch.load(checkpoint, map_location="cpu")
             model.load_state_dict(state, strict=False)
         else:
-            print(f"[WARNING] Checkpoint not found: {checkpoint}")
-            print("  Running with random weights (for testing only)")
+            raise FileNotFoundError(
+                f"Checkpoint not found: {checkpoint}\n"
+                "Train the model first:\n"
+                "  python src/training/train.py --mode branch_a\n"
+                "  python src/training/train.py --mode branch_b\n"
+                "  python src/training/train.py --mode branch_c\n"
+                "  python src/training/train.py --mode fusion\n"
+                "Or use --checkpoint to specify a different path."
+            )
 
         return model
 

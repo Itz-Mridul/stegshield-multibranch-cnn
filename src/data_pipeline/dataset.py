@@ -114,8 +114,13 @@ class SteganalysisDataset(Dataset):
             self.samples.append((str(f), 1))
 
         if len(self.samples) == 0:
-            print(f"[WARNING] No samples found in {clean_dir} / {stego_dir}. "
-                  "Check that files are PNG/PGM/BMP and paths are correct.")
+            raise RuntimeError(
+                f"No valid images found in:\n"
+                f"  clean: {clean_dir}\n"
+                f"  stego: {stego_dir}\n"
+                "Accepted formats: PNG, PGM, BMP (JPEG excluded — LSB is lossless only).\n"
+                "Run: bash scripts/setup_boss_dataset.sh  to populate the dataset."
+            )
         else:
             print(f"Dataset: {n} clean + {n} stego = {2 * n} total images"
                   + (f" [from {len(allowed_stems)} source stems]" if allowed_stems else ""))

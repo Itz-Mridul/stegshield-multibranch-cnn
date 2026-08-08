@@ -213,11 +213,19 @@ def train(cfg: Config):
         clean_dir=cfg.clean_dir,
         stego_dir=cfg.stego_dir,
         batch_size=cfg.batch_size,
-        image_size=cfg.image_size,
+        crop_size=cfg.image_size,      # lossless crop, not bilinear resize
         val_split=cfg.val_split,
         max_images=cfg.max_images,
         num_workers=cfg.num_workers
     )
+
+    if len(train_loader) == 0 or len(val_loader) == 0:
+        raise RuntimeError(
+            f"Empty dataloader(s): train={len(train_loader)} batches, "
+            f"val={len(val_loader)} batches. "
+            "Check that data/clean/ and data/stego/ contain PNG/PGM images, "
+            "then re-run: bash scripts/setup_boss_dataset.sh"
+        )
 
     # ── Model ─────────────────────────────────────────────────────────────────
     model = get_model(cfg).to(device)
@@ -251,12 +259,18 @@ def train(cfg: Config):
     scaler = GradScaler() if (cfg.mixed_precision and device.type == "cuda") else None
 
     # ── Training Loop ─────────────────────────────────────────────────────────
-    best_val_acc = 0.0
+    # Early stopping monitors VALIDATION LOSS (lower = better).
+    # We do NOT use val_accuracy because accuracy can plateau while loss still
+    # improves (important for calibration), and accuracy is less smooth near
+    # saturation. Saving the checkpoint at lowest val_loss gives the best
+    # generalising model.
+    best_val_loss = float("inf")
     no_improve = 0
     history = {"train_loss": [], "train_acc": [], "val_loss": [], "val_acc": []}
     checkpoint_path = get_checkpoint_name(cfg)
 
     print(f"\nStarting training for {cfg.epochs} epochs...")
+    print(f"Early stopping: patience={cfg.early_stop_patience} epochs (monitors val_loss)")
     print("-" * 60)
 
     for epoch in range(1, cfg.epochs + 1):
@@ -282,22 +296,24 @@ def train(cfg: Config):
               f"Val: loss={val_metrics['loss']:.4f}, acc={val_metrics['accuracy']:.1f}% | "
               f"LR={scheduler.get_last_lr()[0]:.2e} | {elapsed:.0f}s")
 
-        # Save best checkpoint
-        if val_metrics["accuracy"] > best_val_acc:
-            best_val_acc = val_metrics["accuracy"]
+        # Save best checkpoint (by val_loss, not val_acc)
+        if val_metrics["loss"] < best_val_loss:
+            best_val_loss = val_metrics["loss"]
             torch.save(model.state_dict(), checkpoint_path)
-            print(f"  ★ New best model saved → {checkpoint_path} (val acc: {best_val_acc:.1f}%)")
+            print(f"  ★ New best model saved → {checkpoint_path} "
+                  f"(val_loss={best_val_loss:.4f}, val_acc={val_metrics['accuracy']:.1f}%)")
             no_improve = 0
         else:
             no_improve += 1
 
-        # Early stopping
+        # Early stopping on val_loss
         if no_improve >= cfg.early_stop_patience:
-            print(f"\nEarly stopping at epoch {epoch} (no improvement for {no_improve} epochs)")
+            print(f"\nEarly stopping at epoch {epoch} "
+                  f"(val_loss did not improve for {no_improve} epochs)")
             break
 
     print("\n" + "=" * 60)
-    print(f"Training complete! Best val accuracy: {best_val_acc:.2f}%")
+    print(f"Training complete! Best val loss: {best_val_loss:.4f}")
     print(f"Best model saved to: {checkpoint_path}")
 
     # Save training history

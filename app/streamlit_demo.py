@@ -191,8 +191,25 @@ div[data-testid="stSidebar"] { background-color: #12121f; }
 
 @st.cache_resource
 def load_predictor():
-    """Load model once and cache it. Streamlit caches this across requests."""
+    """Load model once and cache it. Raises a visible error if checkpoint is missing."""
     checkpoint = os.path.join(PROJ_ROOT, "weights", "fusion_best.pt")
+
+    if not os.path.exists(checkpoint):
+        st.error(
+            "⛔ **Model checkpoint not found.**\n\n"
+            f"Expected: `{checkpoint}`\n\n"
+            "Train the model first, then restart the demo:\n"
+            "```bash\n"
+            "python src/training/train.py --mode branch_a\n"
+            "python src/training/train.py --mode branch_b\n"
+            "python src/training/train.py --mode branch_c\n"
+            "python src/training/train.py --mode fusion\n"
+            "```\n"
+            "Or download pretrained weights from the Google Colab notebook: "
+            "`notebooks/05_fusion_training.ipynb`"
+        )
+        st.stop()   # halts execution — no random-weight predictions shown
+
     return SteganalysiPredictor(checkpoint=checkpoint)
 
 
