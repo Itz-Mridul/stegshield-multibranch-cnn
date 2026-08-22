@@ -250,10 +250,19 @@ def train(cfg: Config):
         )
 
     # ── Learning Rate Scheduler ───────────────────────────────────────────────
-    warmup = LinearLR(optimizer, start_factor=0.1, total_iters=cfg.warmup_epochs)
-    cosine = CosineAnnealingLR(optimizer, T_max=cfg.epochs - cfg.warmup_epochs, eta_min=1e-6)
-    scheduler = SequentialLR(optimizer, schedulers=[warmup, cosine],
-                              milestones=[cfg.warmup_epochs])
+    # Guard: if epochs <= warmup_epochs (e.g. quick test runs), CosineAnnealingLR
+    # gets T_max=0 which causes ZeroDivisionError. Clamp to safe values.
+    effective_warmup = min(cfg.warmup_epochs, max(0, cfg.epochs - 1))
+    cosine_epochs    = max(1, cfg.epochs - effective_warmup)
+
+    if effective_warmup > 0:
+        warmup    = LinearLR(optimizer, start_factor=0.1, total_iters=effective_warmup)
+        cosine    = CosineAnnealingLR(optimizer, T_max=cosine_epochs, eta_min=1e-6)
+        scheduler = SequentialLR(optimizer, schedulers=[warmup, cosine],
+                                 milestones=[effective_warmup])
+    else:
+        # No warmup — just cosine from epoch 1
+        scheduler = CosineAnnealingLR(optimizer, T_max=cosine_epochs, eta_min=1e-6)
 
     # ── Mixed Precision (GPU only) ────────────────────────────────────────────
     scaler = GradScaler() if (cfg.mixed_precision and device.type == "cuda") else None
