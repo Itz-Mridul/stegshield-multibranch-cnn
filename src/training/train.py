@@ -331,7 +331,7 @@ def train(cfg: Config):
         json.dump(history, f, indent=2)
     print(f"Training history saved to: {history_path}")
 
-    return history, best_val_acc
+    return history, best_val_loss
 
 
 # ─── CLI Entry Point ──────────────────────────────────────────────────────────
